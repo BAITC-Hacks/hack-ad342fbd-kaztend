@@ -97,7 +97,7 @@ frontend/index.html  ──JSON──▶  backend/app.py (FastAPI)
 Подробнее: `docs/ARCHITECTURE.md` (схема) и `docs/METHODOLOGY.md` (формула, методология, источники).
 
 ## 7. Установка и запуск
-Требования: Python 3.11–3.13 (локально проверено на 3.12; CI — 3.11/3.12/3.13), Windows / macOS / Linux. Docker — по желанию.
+Требования: Python 3.11–3.13 (локально проверено на 3.12), Windows / macOS / Linux. Docker — по желанию.
 
 ```bash
 git clone https://github.com/BAITC-Hacks/hack-ad342fbd-kaztend.git
@@ -120,7 +120,7 @@ bash scripts/run.sh
 
 Версии прямых зависимостей зафиксированы в `requirements.txt`. Скрипты запуска и тестов автоматически используют `.venv`, если она существует. `APP_PORT` поддерживается обеими версиями скрипта запуска.
 
-Проверки: `scripts/test.ps1` или `bash scripts/test.sh`. GitHub Actions проверяет чистую установку и backend на Windows/Linux.
+Проверки: `scripts/test.ps1` или `bash scripts/test.sh`.
 
 Первый полный подбор для нового события/приоритетов может занять до двух минут. Результаты сохраняются в `data/search_cache/` (не включается в Git); повторный запрос использует кэш. Ключ кэша учитывает событие, приоритеты и версию расчётного кода. При недоступности записи поиск продолжает работать с кэшем в памяти.
 
