@@ -1747,7 +1747,7 @@ async function explainNow() {
   const r = Object.assign(e.result, { baseline: e.baseline, baseline_no_event: state.catalog.baseline, event: e.event });
   const same = state.result && JSON.stringify(state.result.indicators) === JSON.stringify(r.indicators);
   if (!same) applyResult(r, key); else { state.resultKey = key; $("#hero").classList.remove("stale"); $("#mobileBar").classList.remove("stale"); updateTitle(); }
-  state.explanation = e.explanation; renderExplanation(e.explanation);
+  state.explanation = e.explanation; state.explanationId = e.scenario_id || null; renderExplanation(e.explanation);
 }
 function renderExplanation(x) {
   const out = $("#explainOut"); clear(out); const p = el("div", { class: "explain" });
@@ -2001,7 +2001,7 @@ async function saveScenario() {
 }
 async function downloadReport() {
   if (!(await liveValidate())) { toast(t("needValid")); return; }
-  const md = await api("/api/report", { decisions: decisions(), team: $("#teamName").value, event: state.event || null, explanation: resultFresh() ? state.explanation : null });
+  const md = await api("/api/report", { decisions: decisions(), team: $("#teamName").value, event: state.event || null, explanation: resultFresh() ? state.explanation : null, explanation_scenario_id: resultFresh() ? state.explanationId : null });
   download("astana_scenario_brief.md", md, "text/markdown;charset=utf-8");
 }
 function exportJson() { download("astana_scenario.json", JSON.stringify({ team: $("#teamName").value, decisions: decisions(), event: state.event || null, result: resultFresh() ? state.result : null, explanation: resultFresh() ? state.explanation : null, analysis: resultFresh() ? state.analysis : null, exported_at: new Date().toISOString() }, null, 2), "application/json"); }
