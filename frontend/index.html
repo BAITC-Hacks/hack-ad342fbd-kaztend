@@ -262,7 +262,7 @@ main :is(button,a,select,input,textarea,summary,[tabindex]){scroll-margin-top:ca
 .matrix td.cell .dv{font-size:10.5px;line-height:1;display:inline-flex;align-items:center;gap:2px;color:inherit}
 .matrix td.cell .dv .ic{width:10px;height:10px}
 .matrix td.cell button.crit{border-color:var(--alert);box-shadow:inset 0 0 0 1px var(--alert);background-image:repeating-linear-gradient(135deg,transparent 0 6px,rgba(179,38,30,.10) 6px 8px)}
-.matrix td.cell button.crit .v{color:var(--alert)}
+.matrix:not([data-mode="delta"]) td.cell button.crit .v{color:var(--alert)}
 .matrix td.score{padding:4px 8px;font-weight:600;white-space:nowrap;border-left:1px solid var(--rule-2)}
 .matrix td.score small{display:block;font-weight:400;font-size:11px;color:var(--muted)}
 .matrix tfoot td{padding:6px 4px;font-size:11px;color:var(--muted);font-family:var(--mono)}
@@ -1650,7 +1650,7 @@ function showDistrict(name) {
 /* ===================== matrix ===================== */
 function renderMatrix() {
   const tbl = $("#matrix"); clear(tbl); const cat = state.catalog, r = state.result; const rows = matrixData();
-  const mode = r ? state.matrixMode : "before";
+  const mode = r ? state.matrixMode : "before"; tbl.dataset.mode = mode;
   $$("#matrixModeSeg button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.mode === mode)));
   const cg = el("colgroup", {}, el("col", { style: { width: "112px" } }), ...cat.indicators.map(() => el("col")), el("col", { style: { width: "84px" } })); tbl.appendChild(cg);
   const thead = el("thead");
@@ -1852,6 +1852,7 @@ function renderPareto() {
   if (cur && state.bestUnder && state.bestUnder.best && state.bestUnder.cap === cur.cost && state.bestUnder.best.score > cur.score + 1e-9) { const b = state.bestUnder.best; svg.appendChild(el("line", { class: "guide", x1: X(cur.cost), x2: X(cur.cost), y1: Y(cur.score) - 10, y2: Y(b.score) })); svg.appendChild(el("line", { class: "guide", x1: X(cur.cost), x2: X(b.cost), y1: Y(b.score), y2: Y(b.score) })); svg.appendChild(el("text", { class: "guide-lbl", x: X(cur.cost) + (X(cur.cost) > W - 200 ? -8 : 8), y: Y(b.score) - 6, "text-anchor": X(cur.cost) > W - 200 ? "end" : "start", text: t("sameBudget").replace("{c}", cur.cost).replace("{s}", fmt2(b.score)) })); }
   if (cur) { const right = X(cur.cost) > W - 130; svg.appendChild(el("circle", { class: "you", cx: X(cur.cost), cy: Y(cur.score), r: 9 })); svg.appendChild(el("text", { class: "you-lbl", x: X(cur.cost) + (right ? -13 : 13), y: Y(cur.score) + 4, "text-anchor": right ? "end" : "start", text: t("yourScenario") })); }
   out.appendChild(el("div", { class: "chart" }, svg, el("p", { class: "hint", style: { marginTop: "6px" }, text: `${t("evaluated")}: ${p.evaluated.toLocaleString("ru-RU")}.${L() ? "" : " " + (p.method || "")}` })));
+  { const rw = svg.getBoundingClientRect().width; const kk = rw > 0 ? W / rw : 1; svg.querySelectorAll("circle.hit").forEach(c => c.setAttribute("r", String(Math.ceil(22 * Math.max(1, kk))))); }
   if (state.bestUnder && state.bestUnder.best && r && state.bestUnder.cap === r.cost) { const b = state.bestUnder.best; const isYou = cur && b.cost === cur.cost && Math.abs(b.score - cur.score) < 1e-9;
     const row = el("div", { class: "set" + (isYou ? " you" : ""), style: { marginTop: "10px" } }, el("div", { class: "l" }, el("b", { text: t("bestUnderTpl").replace("{c}", state.bestUnder.cap).replace("{s}", fmt2(b.score)).replace("{k}", b.cost) }), el("span", {}, ...b.decisions.map(d => el("span", { class: "chip" }, el("code", { text: d.measure }), d.district ? " " + dn(d.district) : "")))), isYou ? el("span", { class: "badge accent", text: t("yourSet") }) : applyBtn(b.decisions)); out.appendChild(row); }
   const sets = el("div", { class: "sets" });
@@ -2067,7 +2068,7 @@ function switchTab(name, push = true) {
   TABS.forEach(n => { $("#tab-" + n).hidden = n !== name; });
   if (push) history.replaceState(null, "", "#" + name);
   if (name === "scenarios") guard(loadScenarios)();
-  if (name === "analytics" && !state.pareto) loadPareto().then(renderPareto);
+  if (name === "analytics") { if (!state.pareto) loadPareto().then(renderPareto); else renderPareto(); }
   hideTip();
 }
 function initTabs() {
