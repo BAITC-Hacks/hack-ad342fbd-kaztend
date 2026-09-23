@@ -66,11 +66,14 @@ def fallback_explanation(decisions, result, base):
             "recommendation": "Объяснение сформировано без LLM (DEMO_MODE или нет ключа). Для AI-анализа задайте OPENAI_API_KEY.",
             "source": "deterministic"}
 
-async def explain_scenario(decisions, result, base):
+async def explain_scenario(decisions, result, base, lang: str = "ru", event: dict | None = None):
     if demo_mode() or not openai_key():
         return fallback_explanation(decisions, result, base)
     try:
-        out = await structured(INSTRUCTIONS, json.dumps(_payload(decisions, result, base), ensure_ascii=False), EXPLAIN_SCHEMA, "scenario_explanation")
+        payload = _payload(decisions, result, base)
+        if event: payload["event"] = {"name": event["name"], "description": event["description"], "shocks": event["shocks"]}
+        instr = INSTRUCTIONS + (" Отвечай на казахском языке." if lang == "kz" else "")
+        out = await structured(instr, json.dumps(payload, ensure_ascii=False), EXPLAIN_SCHEMA, "scenario_explanation")
         out["source"] = MODEL
         return out
     except Exception as e:

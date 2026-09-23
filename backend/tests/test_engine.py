@@ -1,4 +1,5 @@
-﻿import sys, os
+"""Проверка движка на контрольных числах из ТЗ Astana Innovations."""
+import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from engine import Decision, simulate, baseline, validate
 
@@ -19,11 +20,11 @@ def test_cheapest_valid_set():
 
 def test_rules():
     assert validate([Decision("M1","Есиль"),Decision("M3","Нура"),Decision("M12"),Decision("M14"),Decision("M9","Нура")])
-    assert validate([Decision("M4","Нура"),Decision("M7","Нура"),Decision("M12"),Decision("M14"),Decision("M9","Есиль")])
-    assert validate([Decision("M3","Нура"),Decision("M13","Нура"),Decision("M5","Есиль"),Decision("M7","Нура"),Decision("M8","Нура")])
-    assert validate([Decision("M7","Нура"),Decision("M8","Нура"),Decision("M9","Нура"),Decision("M12"),Decision("M14")])
-    assert validate([Decision("M12"),Decision("M14"),Decision("M2"),Decision("M6")])
-    assert validate([Decision("M12","Нура"),Decision("M14"),Decision("M2"),Decision("M6"),Decision("M9","Нура")])
+    assert validate([Decision("M4","Нура"),Decision("M7","Нура"),Decision("M12"),Decision("M14"),Decision("M9","Есиль")])  # M4+M7 один район
+    assert validate([Decision("M3","Нура"),Decision("M13","Нура"),Decision("M5","Есиль"),Decision("M7","Нура"),Decision("M8","Нура")])  # бюджет 127
+    assert validate([Decision("M7","Нура"),Decision("M8","Нура"),Decision("M9","Нура"),Decision("M12"),Decision("M14")])  # 3 меры соцсферы
+    assert validate([Decision("M12"),Decision("M14"),Decision("M2"),Decision("M6")])  # 4 решения
+    assert validate([Decision("M12","Нура"),Decision("M14"),Decision("M2"),Decision("M6"),Decision("M9","Нура")])  # район у городской меры
     assert not validate([Decision("M2"),Decision("M3","Нура"),Decision("M8","Нура"),Decision("M9","Нура"),Decision("M14")])
 
 def test_score_changes_with_decisions():

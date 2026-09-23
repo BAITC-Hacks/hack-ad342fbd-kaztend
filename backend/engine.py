@@ -1,9 +1,9 @@
-﻿"""Движок симулятора «Аким на 5 часов» (HackAlem AI, спец-трек Astana Innovations).
+"""Движок симулятора «Аким на 5 часов» (HackAlem AI, спец-трек Astana Innovations).
 Детерминированный расчёт Astana Quality of Life Score по ТЗ. LLM числа не считает."""
 from __future__ import annotations
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
-H = 8
+H = 8                      # горизонт, кварталов
 BUDGET = 100
 N_DECISIONS = 5
 MAX_PER_DIRECTION = 2
@@ -16,7 +16,7 @@ INDICATOR_NAMES = {
  "S1":"Школы и детсады","S2":"Поликлиники и первичная медпомощь","B1":"Безопасность улиц",
  "B2":"Безопасность дорожного движения","C1":"Надёжность ЖКХ","C2":"Скорость решения обращений жителей"}
 
-DISTRICTS = {
+DISTRICTS = {  # район: (доля населения, показатели)
  "Есиль":    (0.27, [45,62,68,72,48,55,78,60,75,70]),
  "Алматы":   (0.24, [40,75,50,55,60,65,62,52,50,60]),
  "Сарыарка": (0.20, [50,70,42,40,62,68,58,55,45,55]),
@@ -48,8 +48,10 @@ MEASURES = {m.id: m for m in [
  Measure("M13","Сервисы","Модернизация тепло- и водосетей","Район",28,4,{"C1":18,"E2":2}),
  Measure("M14","Сервисы","Аварийные бригады ЖКХ + раннее оповещение","Город",16,1,{"C1":5,"C2":2}),
 ]}
+# Синергии: (мера A, мера B) -> (показатель, бонус); бонус в районе меры A; лагом не масштабируется
 SYNERGIES = {("M1","M2"):("T1",2), ("M10","M12"):("B1",2), ("M5","M6"):("E2",2)}
-INCOMPAT_ANY = [("M1","M3")]
+# Несовместимости
+INCOMPAT_ANY = [("M1","M3")]                 # в любых районах
 INCOMPAT_SAME_DISTRICT = [("M4","M7"),("M5","M13")]
 
 @dataclass
@@ -58,6 +60,7 @@ class Decision:
     district: str | None = None
 
 def validate(decisions: list[Decision]) -> list[str]:
+    """Возвращает список причин невалидности (пусто = валидно)."""
     errs = []
     ids = [d.measure for d in decisions]
     if len(decisions) != N_DECISIONS:
@@ -88,12 +91,15 @@ def validate(decisions: list[Decision]) -> list[str]:
             errs.append(f"Несовместимы {a} и {b} в одном районе ({by_id[a].district})")
     return errs
 
-def simulate(decisions: list[Decision]) -> dict:
+def simulate(decisions: list[Decision], districts: dict | None = None) -> dict:
+    """Полный расчёт. districts — необязательные изменённые исходные показатели (события).
+    Возвращает новые показатели, вклады мер, оценки районов и Score."""
+    districts = districts or DISTRICTS
     errs = validate(decisions)
     if errs:
         return {"valid": False, "errors": errs}
-    new = {d: list(v) for d,(_,v) in DISTRICTS.items()}
-    contrib = []
+    new = {d: list(v) for d,(_,v) in districts.items()}
+    contrib = []  # (мера, район, показатель, дельта)
     by_id = {d.measure: d for d in decisions}
     for d in decisions:
         m = MEASURES[d.measure]; share = (H - m.lag)/H
@@ -113,7 +119,7 @@ def simulate(decisions: list[Decision]) -> dict:
     for dist in new:
         new[dist] = [min(100,max(0,x)) for x in new[dist]]
     d_scores = {dist: sum(WEIGHTS[k]*new[dist][i] for i,k in enumerate(INDICATORS)) for dist in new}
-    d_avg = sum(DISTRICTS[dist][0]*d_scores[dist] for dist in new)
+    d_avg = sum(districts[dist][0]*d_scores[dist] for dist in new)
     d_min = min(d_scores.values())
     n_crit = sum(1 for dist in new for x in new[dist] if x < CRIT_THRESHOLD)
     crit = [(dist,k) for dist in new for i,k in enumerate(INDICATORS) if new[dist][i] < CRIT_THRESHOLD]
@@ -125,14 +131,30 @@ def simulate(decisions: list[Decision]) -> dict:
             "indicators": {d: dict(zip(INDICATORS,[round(x,2) for x in v])) for d,v in new.items()},
             "contributions": contrib}
 
-def baseline() -> dict:
-    d_scores = {d: sum(WEIGHTS[k]*v[i] for i,k in enumerate(INDICATORS)) for d,(_,v) in DISTRICTS.items()}
-    d_avg = sum(DISTRICTS[d][0]*d_scores[d] for d in d_scores)
-    n_crit = sum(1 for _,v in DISTRICTS.values() for x in v if x < CRIT_THRESHOLD)
+def baseline(districts: dict | None = None) -> dict:
+    """Score без действий (в ТЗ: 52.56). districts — необязательные изменённые показатели (события)."""
+    districts = districts or DISTRICTS
+    d_scores = {d: sum(WEIGHTS[k]*v[i] for i,k in enumerate(INDICATORS)) for d,(_,v) in districts.items()}
+    d_avg = sum(districts[d][0]*d_scores[d] for d in d_scores)
+    n_crit = sum(1 for _,v in districts.values() for x in v if x < CRIT_THRESHOLD)
+    crit = [(d,k) for d,(_,v) in districts.items() for i,k in enumerate(INDICATORS) if v[i] < CRIT_THRESHOLD]
     return {"score": round(0.7*d_avg+0.3*min(d_scores.values())-n_crit,2), "d_avg": round(d_avg,2),
-            "d_min": round(min(d_scores.values()),2), "n_crit": n_crit, "district_scores": {k:round(v,2) for k,v in d_scores.items()}}
+            "d_min": round(min(d_scores.values()),2), "n_crit": n_crit, "critical": crit,
+            "district_scores": {k:round(v,2) for k,v in d_scores.items()},
+            "indicators": {d: dict(zip(INDICATORS, v)) for d,(_,v) in districts.items()}}
+
+def score_with_weights(result: dict, weights: dict, districts: dict | None = None) -> float:
+    """Пересчёт Score для уже рассчитанных показателей с другими весами (анализ робастности)."""
+    districts = districts or DISTRICTS
+    d_scores = {d: sum(weights[k]*result["indicators"][d][k] for k in INDICATORS) for d in result["indicators"]}
+    d_avg = sum(districts[d][0]*d_scores[d] for d in d_scores)
+    return round(0.7*d_avg + 0.3*min(d_scores.values()) - result["n_crit"], 2)
 
 if __name__ == "__main__":
     print("BASE:", baseline())
     sample = [Decision("M7","Нура"),Decision("M8","Нура"),Decision("M10","Нура"),Decision("M12"),Decision("M5","Сарыарка")]
-    r = simulate(sample); print("SAMPLE (ТЗ: cost 95, Score~56.5):", r["cost"], r["score"], r["district_scores"])
+    r = simulate(sample); print("SAMPLE (ТЗ: cost 95, Score≈56.5):", r["cost"], r["score"], r["district_scores"], r["n_crit"], r["critical"])
+    cheap = [Decision("M9","Нура"),Decision("M11","Нура"),Decision("M10","Нура"),Decision("M12"),Decision("M4","Нура")]
+    r2 = simulate(cheap); print("CHEAPEST (ТЗ: cost 61, valid):", r2["valid"], r2.get("cost"), r2.get("score"), r2.get("errors"))
+    bad = [Decision("M1","Есиль"),Decision("M3","Нура"),Decision("M12"),Decision("M14"),Decision("M9","Нура")]
+    print("INVALID:", simulate(bad)["errors"])
