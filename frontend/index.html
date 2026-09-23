@@ -132,6 +132,7 @@
       </div>
       <ul class="errors" id="errors"></ul>
       <div class="ok hidden" id="okMsg" data-i18n="okMsg">Набор допустим — можно рассчитывать.</div>
+      <div id="scenarioNotice" class="muted" role="status" style="margin-top:8px"></div>
       <p class="muted" id="rules"></p>
     </div>
     <div class="card">
@@ -202,6 +203,15 @@
         </div>
         <div class="chat" id="chat"></div>
         <div class="row"><textarea id="agentInput" rows="2" placeholder="Например: «Хочу поднять соцсферу в Нуре и не выходить за 85 у.е.»"></textarea></div>
+        <div class="card" style="margin-top:10px;padding:12px" id="agentConstraints">
+          <label><input type="checkbox" id="autoConstraints" checked style="width:auto"> <span data-i18n="autoConstraints">Распознавать условия из запроса</span></label>
+          <div class="row">
+            <label style="flex:1"><span data-i18n="limitBudget">Лимит бюджета</span><input id="agentBudget" type="number" min="0" max="100" step="1" value="100"></label>
+            <label style="flex:1"><span data-i18n="focusDistrict">Приоритетный район</span><select id="agentFocus"></select></label>
+          </div>
+          <label><span data-i18n="focusDirections">Приоритетные направления</span><select id="agentDirections" multiple size="5"></select></label>
+          <p class="muted" data-i18n="constraintsNote">Приоритет района — минимум две районные меры. Для каждого выбранного направления нужна хотя бы одна мера, при указанном районе — в этом районе. Поля можно изменить вручную.</p>
+        </div>
         <div class="row"><button class="primary auto" id="btnAgent" data-i18n="agentBtn">Спросить агента</button><button class="ghost auto" id="btnApplyAgent" disabled data-i18n="applyAgent">Применить набор агента</button></div>
         <h3 data-i18n="traceTitle">Трасса агента (инструменты и их результаты)</h3>
         <div class="trace" id="trace">—</div>
@@ -235,7 +245,7 @@ const $ = s => document.querySelector(s);
 const I18N = {
   ru: {},
   kz: {title:"5 сағаттық әкім — Астана бюджетінің AI-симуляторы", subtitle:"Бір бюджет, бес шешім, Astana Quality of Life Score. Сандарды ТТ бойынша детерминирленген модель есептейді; AI түсіндіреді, кеңес береді және шешімдер ізін сақтайды.",
-       noEvent:"Оқиғасыз", randomEvent:"🎲 Күтпеген оқиға", decisions:"Бюджет және шешімдер", spent:"Жұмсалды", left:"Қалдық", simulate:"Score есептеу", preset:"ТТ мысалы", clear:"Тазалау",
+       autoConstraints:"Шектеулерді сұраудан анықтау", limitBudget:"Бюджет шегі", focusDistrict:"Басым аудан", focusDirections:"Басым бағыттар", constraintsNote:"Аудан басымдығы — кемінде екі аудандық шара. Әр таңдалған бағыттан кемінде бір шара қажет, аудан көрсетілсе — сол ауданда. Өрістерді қолмен өзгертуге болады.", noEvent:"Оқиғасыз", randomEvent:"🎲 Күтпеген оқиға", decisions:"Бюджет және шешімдер", spent:"Жұмсалды", left:"Қалдық", simulate:"Score есептеу", preset:"ТТ мысалы", clear:"Тазалау",
        okMsg:"Жиынтық жарамды — есептеуге болады.", saveTitle:"Команда сценарийін сақтау", save:"Сақтау", report:"Брифинг жүктеу (Markdown)", exportJson:"JSON экспорты",
        tabResult:"Нәтиже", tabAnalytics:"Аналитика", tabAgent:"AI-кеңесші", tabScenarios:"Команда сценарийлері", tabMethod:"Әдістеме", baseline:"Әрекетсіз база",
        mapTitle:"Аудандар картасы (схема): аудан бағасы бұрын → кейін", before:"Бұрын", after:"Кейін", mapNote:"Плитка өлшемі — халық үлесі. Есіл өзені сол жағалаудағы Есілді оң жағалау аудандарынан бөледі. Ауданды басыңыз.",
@@ -250,6 +260,8 @@ const I18N = {
 const KZ_DISTRICT = {"Есиль":"Есіл","Алматы":"Алматы","Сарыарка":"Сарыарқа","Байконур":"Байқоңыр","Нура":"Нұра"};
 const KZ_DIRECTION = {"Транспорт":"Көлік","Экология":"Экология","Соцсфера":"Әлеуметтік сала","Безопасность":"Қауіпсіздік","Сервисы":"Қызметтер"};
 let lang = "ru", catalog = null, lastResult = null, lastExplanation = null, agentDecisions = null, mapMode = "before";
+let scenarioRevision = 0, resultSnapshot = null, explanationScenarioId = null, agentRequest = 0;
+const paretoByEvent = new Map();
 const PRESET = [["M7","Нура"],["M8","Нура"],["M10","Нура"],["M12",null],["M5","Сарыарка"]];
 const t = k => (I18N[lang] && I18N[lang][k]) || null;
 const L = () => lang === "kz";
@@ -260,10 +272,47 @@ const fmt = x => (Math.round(x*100)/100).toFixed(2);
 async function api(path, body, method){
   const r = await fetch(path, body ? {method: method || "POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body)} : (method ? {method} : {}));
   const ct = r.headers.get("content-type") || "";
-  return ct.includes("json") ? r.json() : r.text();
+  const value = await (ct.includes("json") ? r.json() : r.text());
+  if (!r.ok) throw new Error(typeof value.detail === "string" ? value.detail : (L()?"Сұрау орындалмады":"Не удалось выполнить запрос"));
+  return value;
 }
 function currentEvent(){ return $("#eventSelect").value || null; }
 function decisions(){ const out = []; for (let i=0;i<5;i++){ const m = $(`#m${i}`).value, d = $(`#d${i}`).value; if (m) out.push({measure:m, district: d || null}); } return out; }
+function captureScenario(){ return {revision:scenarioRevision, body:{decisions:decisions(), event:currentEvent(), lang}}; }
+function isCurrent(snapshot){ return snapshot.revision === scenarioRevision && JSON.stringify(snapshot.body) === JSON.stringify(captureScenario().body); }
+function currentBaseline(){ return catalog.events.find(e => e.id === currentEvent())?.baseline || catalog.baseline; }
+function canExport(){ return lastResult?.valid && resultSnapshot && isCurrent(resultSnapshot); }
+function invalidateScenario(){
+  scenarioRevision++; agentRequest++;
+  lastResult = null; lastExplanation = null; resultSnapshot = null; explanationScenarioId = null; agentDecisions = null;
+  $("#btnApplyAgent").disabled = true;
+  $("#btnReport").disabled = true; $("#btnJson").disabled = true;
+  ["#kv","#districts","#contrib","#explainOut","#analyticsOut","#adviseOut","#trace","#mapInfo","#delta","#saveMsg"].forEach(id => $(id).textContent = "");
+  $("#scenarioNotice").textContent = L()?"Сценарий өзгерді. Нәтиже мен түсіндірмені қайта есептеңіз.":"Сценарий изменён. Рассчитайте результат и объяснение заново.";
+  const base = currentBaseline(); $("#baseScore").textContent = fmt(base.score);
+  renderGauge(null, base.score); mapMode = "before"; renderMap();
+  const cached = paretoByEvent.get(currentEvent());
+  if (cached) renderPareto(cached); else $("#paretoOut").textContent = "";
+}
+async function runAction(button, action){
+  if (button) button.disabled = true;
+  try { return await action(); }
+  catch (e) { $("#errors").textContent = e.message; return null; }
+  finally { if (button) button.disabled = false; }
+}
+function download(content, type, filename){
+  const url = URL.createObjectURL(new Blob([content], {type}));
+  const a = document.createElement("a"); a.href = url; a.download = filename; a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+async function loadPareto(snapshot = captureScenario()){
+  const event = snapshot.body.event;
+  if (paretoByEvent.has(event)){ if (isCurrent(snapshot)) renderPareto(paretoByEvent.get(event)); return; }
+  if (isCurrent(snapshot)) $("#paretoOut").textContent = L()?"Оқиғаға арналған нұсқалар есептелуде…":"Рассчитываются варианты для выбранного события. Первый поиск может занять до двух минут…";
+  const p = await api("/api/pareto" + (event ? "?event="+encodeURIComponent(event) : ""));
+  paretoByEvent.set(event, p);
+  if (isCurrent(snapshot)) renderPareto(p);
+}
 function measureById(id){ return catalog.measures.find(m => m.id===id); }
 function applyI18n(){
   document.querySelectorAll("[data-i18n]").forEach(el => { const v = t(el.dataset.i18n); el.textContent = v || el.dataset.ru; });
@@ -277,15 +326,16 @@ function renderSlots(){
     const dopts = ['<option value="">— ' + (L()?"аудан":"район") + ' —</option>'].concat(catalog.districts.map(d => `<option value="${d.name}">${dn(d.name)}</option>`)).join("");
     box.insertAdjacentHTML("beforeend", `<div class="slot"><div class="n">${i+1}</div><select id="m${i}">${opts}</select><select id="d${i}" disabled>${dopts}</select></div>`);
   }
-  for (let i=0;i<5;i++){ $(`#m${i}`).addEventListener("change", () => { syncSlot(i); liveValidate(); }); $(`#d${i}`).addEventListener("change", liveValidate); }
+  for (let i=0;i<5;i++){ $(`#m${i}`).addEventListener("change", () => { syncSlot(i); invalidateScenario(); runAction(null, () => liveValidate()); }); $(`#d${i}`).addEventListener("change", () => { invalidateScenario(); runAction(null, () => liveValidate()); }); }
 }
 function syncSlot(i){ const m = measureById($(`#m${i}`).value); const d = $(`#d${i}`); if (!m || m.scope === "Город"){ d.value = ""; d.disabled = true; } else d.disabled = false; }
-async function liveValidate(){
-  const decs = decisions();
+async function liveValidate(snapshot = captureScenario()){
+  const decs = snapshot.body.decisions;
   const spent = decs.reduce((s,d)=> s + (measureById(d.measure)?.cost||0), 0);
   $("#spent").textContent = spent; $("#left").textContent = catalog.budget - spent;
   const bar = $("#budgetBar"); bar.style.width = Math.min(100, spent) + "%"; bar.classList.toggle("over", spent > catalog.budget);
   const v = await api("/api/validate", {decisions: decs});
+  if (!isCurrent(snapshot)) return false;
   $("#errors").innerHTML = v.errors.map(e => `<li>${e}</li>`).join("");
   $("#okMsg").classList.toggle("hidden", !v.valid);
   return v.valid;
@@ -293,13 +343,14 @@ async function liveValidate(){
 function setDecisions(list){
   for (let i=0;i<5;i++){ const it = list[i]; const m = it ? (Array.isArray(it) ? it[0] : it.measure) : ""; const d = it ? (Array.isArray(it) ? it[1] : it.district) : "";
     $(`#m${i}`).value = m || ""; syncSlot(i); $(`#d${i}`).value = d || ""; }
-  liveValidate();
+  invalidateScenario();
+  runAction(null, () => liveValidate());
 }
 /* ---------- картограмма ---------- */
 const TILES = {"Сарыарка":{x:40,y:40,w:150,h:120},"Байконур":{x:205,y:30,w:110,h:95},"Алматы":{x:330,y:40,w:160,h:130},"Нура":{x:20,y:190,w:170,h:120},"Есиль":{x:215,y:215,w:270,h:125}};
 function colorFor(v){ return v < 50 ? "#c62828" : v < 56 ? "#ef9a2f" : v < 62 ? "#8bc34a" : "#1b7f3b"; }
 function renderMap(){
-  const svg = $("#map"); const base = (lastResult && lastResult.baseline) ? lastResult.baseline.district_scores : catalog.baseline.district_scores; const after = lastResult ? lastResult.district_scores : null;
+  const svg = $("#map"); const base = (lastResult && lastResult.baseline) ? lastResult.baseline.district_scores : currentBaseline().district_scores; const after = lastResult ? lastResult.district_scores : null;
   const vals = (mapMode === "after" && after) ? after : base;
   let html = `<defs><linearGradient id="river" x1="0" x2="1"><stop offset="0" stop-color="#7fb3d5"/><stop offset="1" stop-color="#5d9bc9"/></linearGradient></defs>
     <rect x="0" y="0" width="520" height="360" rx="14" fill="#eef3f8"/>
@@ -315,7 +366,7 @@ function renderMap(){
   }
   svg.innerHTML = html;
   svg.querySelectorAll(".tile").forEach(g => g.addEventListener("click", () => {
-    const d = catalog.districts.find(x => x.name === g.dataset.d); const cnt = after ? lastResult.indicators[d.name] : d.indicators;
+    const d = catalog.districts.find(x => x.name === g.dataset.d); const cnt = (mapMode === "after" && after) ? lastResult.indicators[d.name] : currentBaseline().indicators[d.name];
     $("#mapInfo").innerHTML = `<b>${dn(d.name)}</b> — ${d.profile}<br>` + catalog.indicators.map(i => `<span class="tag" title="${indn(i.code)}">${i.code} ${cnt[i.code] < 40 ? "🔴" : ""}${fmt(cnt[i.code])}</span>`).join("");
   }));
   $("#mapBefore").classList.toggle("on", mapMode === "before"); $("#mapAfter").classList.toggle("on", mapMode === "after");
@@ -334,8 +385,10 @@ function renderGauge(score, base){
   svg.innerHTML = html;
 }
 /* ---------- результат ---------- */
-function renderResult(r){
-  lastResult = r; const base = r.baseline;
+function renderResult(r, snapshot = captureScenario()){
+  if (!r.valid || !isCurrent(snapshot)) return;
+  lastResult = r; resultSnapshot = snapshot;
+  $("#scenarioNotice").textContent = ""; $("#btnReport").disabled = false; $("#btnJson").disabled = false; const base = r.baseline;
   renderGauge(r.score, base.score);
   const d = r.score - base.score; const dl = $("#delta"); dl.textContent = (d>=0?"+":"") + fmt(d) + (L()?" базаға":" к базе"); dl.className = "delta " + (d>=0?"up":"down");
   $("#baseScore").textContent = fmt(base.score) + (r.event ? ` (${L()?"оқиғамен":"с событием"}; ${L()?"оқиғасыз":"без события"} ${fmt(r.baseline_no_event.score)})` : "");
@@ -351,13 +404,20 @@ function renderResult(r){
     r.contributions.map(c => `<tr><td>${c[0]}</td><td>${dn(c[1])}</td><td>${c[2]} · ${indn(c[2])}</td><td class="num">${c[3]>0?"+":""}${fmt(c[3])}</td></tr>`).join("") + "</tbody></table>";
   mapMode = "after"; renderMap();
 }
-function renderExplanation(e){
-  lastExplanation = e;
+function renderExplanation(e, snapshot, scenarioId){
+  if (!isCurrent(snapshot)) return;
+  lastExplanation = e; explanationScenarioId = scenarioId;
   const list = (title, arr) => arr && arr.length ? `<h3>${title}</h3><ul>${arr.map(x=>`<li>${x}</li>`).join("")}</ul>` : "";
   const T = L() ? ["Күшті жақтары","Тәуекелдер","Салдары","Компромистер","Ұсыныс"] : ["Сильные стороны","Риски","Последствия","Компромиссы","Рекомендация"];
   $("#explainOut").innerHTML = `<p><b>${e.summary}</b></p>${list(T[0], e.strengths)}${list(T[1], e.risks)}${list(T[2], e.consequences)}${list(T[3], e.tradeoffs)}<h3>${T[4]}</h3><p style="font-size:13px">${e.recommendation}</p><p class="muted">${L()?"Дереккөз":"Источник"}: ${e.source||"AI"}${e.note?" · "+e.note:""}</p>`;
 }
-async function simulateNow(){ if (!(await liveValidate())) return null; const r = await api("/api/simulate", {decisions: decisions(), event: currentEvent()}); renderResult(r); return r; }
+async function simulateNow(){
+  const snapshot = captureScenario();
+  if (!(await liveValidate(snapshot))) return null;
+  const r = await api("/api/simulate", snapshot.body);
+  if (!isCurrent(snapshot)) return null;
+  renderResult(r, snapshot); return r;
+}
 /* ---------- аналитика ---------- */
 function renderAnalytics(a){
   if (!a.valid){ $("#analyticsOut").innerHTML = `<ul class="errors">${a.errors.map(e=>`<li>${e}</li>`).join("")}</ul>`; return; }
@@ -370,12 +430,14 @@ function renderAnalytics(a){
     <div class="kv"><div>${L()?"Алшақтық макс−мин":"Разрыв макс−мин"}<b>${fmt(q.before.gap)} → ${fmt(q.after.gap)}</b></div><div>${L()?"Джини (аудандар)":"Джини (по районам)"}<b>${q.before.gini} → ${q.after.gini}</b></div><div>${L()?"Ең әлсіз аудан":"Слабейший район"}<b>${dn(q.weakest_before)} → ${dn(q.weakest_after)}</b></div><div>${L()?"Сыни мәндер":"Критических"}<b>${q.n_crit_before} → ${q.n_crit_after}</b></div></div>
     <p class="muted">${q.note}</p></div></div>
     <h3>${L()?"Шаралардың тиімділігі":"Эффективность мер"}</h3>
-    <table><thead><tr><th>${L()?"Шара":"Мера"}</th><th>${L()?"Аудан":"Район"}</th><th class="num">${L()?"Құны":"Стоимость"}</th><th class="num">${L()?"Лаг":"Лаг"}</th><th class="num">${L()?"Score үлесі":"Вклад в Score"}</th><th class="num">Score / у.е.</th></tr></thead><tbody>${ce.map(c=>`<tr><td>${c.measure} ${c.name}</td><td>${c.district?dn(c.district):(L()?"қала":"город")}</td><td class="num">${c.cost}</td><td class="num">${c.lag}</td><td class="num">${c.score_gain>=0?"+":""}${fmt(c.score_gain)}${c.penalty_credit?` <span class="muted">(${L()?"айыппұл алынды":"снят штраф"} +${fmt(c.penalty_credit)})</span>`:""}</td><td class="num">${c.gain_per_unit.toFixed(4)}</td></tr>`).join("")}</tbody></table>
-    <p class="muted">${L()?"Атрибуция жуықталған: 0.7×D_avg үлесі + 0.3×ең әлсіз аудан үлесі + <40 мәндерін көтергені үшін айыппұл алу.":"Атрибуция приближённая: 0.7×вклад в D_avg + 0.3×вклад в слабейший район + снятие штрафа за поднятие значений выше 40."}</p>`;
+    <table><thead><tr><th>${L()?"Шара":"Мера"}</th><th>${L()?"Аудан":"Район"}</th><th class="num">${L()?"Құны":"Стоимость"}</th><th class="num">${L()?"Лаг":"Лаг"}</th><th class="num">${L()?"Score үлесі":"Вклад в Score"}</th><th class="num">Score / у.е.</th></tr></thead><tbody>${ce.map(c=>`<tr><td>${c.measure} ${c.name}</td><td>${c.district?dn(c.district):(L()?"қала":"город")}</td><td class="num">${c.cost}</td><td class="num">${c.lag}</td><td class="num">${c.score_gain>=0?"+":""}${c.score_gain.toFixed(3)}${c.penalty_credit?` <span class="muted">(${L()?"айыппұл үлесі":"вклад штрафов"} ${c.penalty_credit>0?"+":""}${fmt(c.penalty_credit)})</span>`:""}</td><td class="num">${c.gain_per_unit.toFixed(4)}</td></tr>`).join("")}</tbody></table>
+    <p class="muted">${L()?"Шепли үлестері: бес шараның барлық ішкі жиындары, синергиялар және оң/теріс айыппұлдар ескеріледі. Үлестер қосындысы Score өсіміне тең.":"Вклады Шепли: учитываются все подмножества пяти мер, синергии и снятые/новые штрафы. Сумма вкладов равна приросту Score."}</p>`;
 }
 function renderPareto(p){
   if (!p.ready){ $("#paretoOut").innerHTML = `<p class="muted"><span class="spinner"></span> ${L()?"Толық іріктеу дайын емес":"Перебор ещё не готов"}</p>`; return; }
-  const pts = p.front; const W=520,H=220,pl=42,pb=30; const xmin=55,xmax=100,ymin=55,ymax=58;
+  const pts = p.front; const W=520,H=220,pl=42,pb=30; const xmin=55,xmax=100;
+  const scores = pts.map(p=>p.score).concat(lastResult?.valid ? [lastResult.score] : []);
+  const ymin = Math.floor(Math.min(...scores, currentBaseline().score))-1, ymax = Math.ceil(Math.max(...scores, currentBaseline().score))+1;
   const X = c => pl + (c-xmin)/(xmax-xmin)*(W-pl-10), Y = s => H-pb - (s-ymin)/(ymax-ymin)*(H-pb-14);
   let svg = `<svg viewBox="0 0 ${W} ${H}" style="max-width:640px;width:100%"><rect width="${W}" height="${H}" fill="#fff"/>`;
   for (let s=ymin; s<=ymax; s+=1) svg += `<line x1="${pl}" x2="${W-10}" y1="${Y(s)}" y2="${Y(s)}" stroke="#eef1f6"/><text x="4" y="${Y(s)+4}" font-size="10" fill="#66718a">${s}</text>`;
@@ -391,15 +453,39 @@ function renderPareto(p){
 function bindApply(sel){ document.querySelectorAll(`${sel} button[data-set]`).forEach(b => b.addEventListener("click", async () => { setDecisions(JSON.parse(b.dataset.set)); switchTab("result"); await simulateNow(); })); }
 /* ---------- агент ---------- */
 function addMsg(text, who){ const d = document.createElement("div"); d.className = "msg " + who; d.textContent = text; $("#chat").appendChild(d); d.scrollIntoView({block:"nearest"}); }
+function showConstraints(c){
+  $("#agentBudget").value = c.budget; $("#agentFocus").value = c.focus_district || "";
+  for (const option of $("#agentDirections").options) option.selected = (c.directions||[]).includes(option.value);
+}
+function readConstraints(){
+  const budget = Number($("#agentBudget").value);
+  if (!Number.isInteger(budget) || budget < 0 || budget > 100) throw new Error(L()?"Бюджет 0–100 аралығындағы бүтін сан болуы керек":"Бюджет должен быть целым числом от 0 до 100");
+  return {budget, focus_district:$("#agentFocus").value || null, directions:Array.from($("#agentDirections").selectedOptions, o=>o.value)};
+}
 async function askAgent(q){
-  const msg = (q || $("#agentInput").value).trim(); if (!msg) return; $("#agentInput").value = "";
-  addMsg(msg, "user"); const wait = document.createElement("div"); wait.className = "msg bot"; wait.innerHTML = `<span class="spinner"></span> ${L()?"Агент құралдарды шақыруда…":"Агент вызывает инструменты…"}`; $("#chat").appendChild(wait);
-  const r = await api("/api/agent", {message: msg, decisions: decisions(), lang});
-  wait.remove();
-  const decs = (r.decisions||[]).map(d => `${d.measure}${d.district?" · "+dn(d.district):""}`).join(", ");
-  addMsg(`${r.answer || ""}${r.rationale ? "\n\n" + r.rationale : ""}${decs ? "\n\n" + (L()?"Жиынтық":"Набор") + ": " + decs : ""}${r.result && r.result.valid ? `\nScore ${fmt(r.result.score)}, ${L()?"құны":"стоимость"} ${r.result.cost}` : ""}${(r.tradeoffs||[]).length ? "\n" + (L()?"Компромистер":"Компромиссы") + ": " + r.tradeoffs.join("; ") : ""}${r.note ? "\n(" + r.note + ")" : ""}\n[${L()?"дереккөз":"источник"}: ${r.source}]`, "bot");
-  $("#trace").textContent = (r.trace||[]).map((s,i) => `${i+1}. ${s.tool}${s.input?"  ← "+JSON.stringify(s.input).slice(0,160):""}\n   → ${JSON.stringify(s.output).slice(0,420)}`).join("\n\n") || "—";
-  agentDecisions = r.decisions && r.decisions.length ? r.decisions : null; $("#btnApplyAgent").disabled = !agentDecisions;
+  const msg = (q || $("#agentInput").value).trim(); if (!msg) return;
+  const snapshot = captureScenario(), request = ++agentRequest;
+  const automatic = $("#autoConstraints").checked;
+  let constraints = automatic ? null : readConstraints();
+  $("#agentInput").value = ""; agentDecisions = null; $("#btnApplyAgent").disabled = true;
+  addMsg(msg, "user");
+  const wait = document.createElement("div"); wait.className = "msg bot";
+  wait.textContent = L()?"Оқиға мен шектеулерді ескеріп есептелуде…":"Подбираю набор с учётом события и ограничений. Первый полный поиск может занять до двух минут…";
+  $("#chat").appendChild(wait);
+  try {
+    if (automatic){
+      constraints = await api("/api/constraints", {message:msg, decisions:snapshot.body.decisions});
+      if (!isCurrent(snapshot) || request !== agentRequest) return;
+      showConstraints(constraints);
+      constraints = readConstraints();
+    }
+    const r = await api("/api/agent", {message:msg, ...snapshot.body, constraints});
+    if (!isCurrent(snapshot) || request !== agentRequest) return;
+    const decs = (r.decisions||[]).map(d => `${d.measure}${d.district?" · "+dn(d.district):""}`).join(", ");
+    addMsg(`${r.answer || ""}${r.rationale ? "\n\n" + r.rationale : ""}${decs ? "\n\n" + (L()?"Жиынтық":"Набор") + ": " + decs : ""}${r.result?.valid ? `\nScore ${fmt(r.result.score)}, ${L()?"құны":"стоимость"} ${r.result.cost}` : ""}${r.note ? "\n(" + r.note + ")" : ""}\n[${r.source}]`, "bot");
+    $("#trace").textContent = (r.trace||[]).map((s,i) => `${i+1}. ${s.tool}\n${JSON.stringify(s.output)}`).join("\n\n") || "—";
+    agentDecisions = r.result?.valid ? r.decisions : null; $("#btnApplyAgent").disabled = !agentDecisions;
+  } finally { wait.remove(); }
 }
 function renderAdvice(a){
   let html = "";
@@ -428,34 +514,106 @@ function renderMethod(){
   $("#refsOut").innerHTML = (catalog.references||[]).map(r=>`<li>${r}</li>`).join("");
 }
 function switchTab(name){ document.querySelectorAll(".tabs button").forEach(b => b.classList.toggle("on", b.dataset.tab === name)); ["result","analytics","agent","scenarios","method"].forEach(n => $(`#tab-${n}`).classList.toggle("hidden", n !== name)); if (name === "scenarios") loadScenarios(); }
+async function explainNow(){
+  const snapshot = captureScenario();
+  if (!(await liveValidate(snapshot))) return;
+  $("#explainOut").textContent = L()?"Түсіндірме дайындалуда…":"Готовлю объяснение…";
+  const e = await api("/api/explain", snapshot.body);
+  if (!isCurrent(snapshot)) return;
+  if (!e.valid) throw new Error(e.errors.join("; "));
+  renderResult({...e.result, baseline:e.baseline, baseline_no_event:catalog.baseline, event:e.event, scenario_id:e.scenario_id}, snapshot);
+  renderExplanation(e.explanation, snapshot, e.scenario_id);
+}
+async function analyzeNow(){
+  const snapshot = captureScenario();
+  if (!(await liveValidate(snapshot))) return;
+  $("#analyticsOut").textContent = L()?"Талдау…":"Анализирую…";
+  const a = await api("/api/analyze", snapshot.body);
+  if (!isCurrent(snapshot)) return;
+  renderAnalytics(a);
+  if (a.valid) renderResult({...a.result, baseline:a.baseline, baseline_no_event:catalog.baseline, event:a.event, scenario_id:a.scenario_id}, snapshot);
+  await loadPareto(snapshot);
+}
+async function adviceNow(){
+  const snapshot = captureScenario();
+  const valid = await liveValidate(snapshot);
+  if (!isCurrent(snapshot)) return;
+  $("#adviseOut").textContent = L()?"Нұсқалар есептелуде…":"Подбираю варианты для выбранного события…";
+  const a = await api("/api/advise", {...snapshot.body, decisions:valid ? snapshot.body.decisions : []});
+  if (isCurrent(snapshot)) renderAdvice(a);
+}
+async function exportReport(){
+  if (!canExport()) return;
+  const snapshot = resultSnapshot;
+  const md = await api("/api/report", {...snapshot.body, team:$("#teamName").value,
+    explanation:lastExplanation, explanation_scenario_id:explanationScenarioId});
+  if (isCurrent(snapshot)) download(md, "text/markdown", "astana_scenario_brief.md");
+}
+function exportJson(){
+  if (!canExport()) return;
+  download(JSON.stringify({...resultSnapshot.body, result:lastResult, explanation:lastExplanation,
+    explanation_scenario_id:explanationScenarioId}, null, 2), "application/json", "astana_scenario.json");
+}
+function renderConstraintOptions(){
+  const focus = $("#agentFocus").value, dirs = Array.from($("#agentDirections").selectedOptions, o=>o.value);
+  $("#agentFocus").innerHTML = `<option value="">${L()?"Бүкіл қала":"Весь город"}</option>` + catalog.districts.map(d=>`<option value="${d.name}">${dn(d.name)}</option>`).join("");
+  $("#agentFocus").value = focus;
+  $("#agentDirections").innerHTML = Object.keys(KZ_DIRECTION).map(d=>`<option value="${d}">${dirn(d)}</option>`).join("");
+  for (const option of $("#agentDirections").options) option.selected = dirs.includes(option.value);
+}
 /* ---------- init ---------- */
 async function init(){
   document.querySelectorAll("[data-i18n]").forEach(el => el.dataset.ru = el.textContent);
   catalog = await api("/api/catalog");
   $("#budgetTotal").textContent = catalog.budget; $("#left").textContent = catalog.budget; $("#baseScore").textContent = fmt(catalog.baseline.score);
   const evSel = $("#eventSelect"); catalog.events.forEach(e => evSel.insertAdjacentHTML("beforeend", `<option value="${e.id}">${e.name}</option>`));
-  evSel.addEventListener("change", async () => { const e = catalog.events.find(x => x.id === evSel.value); const b = $("#eventBanner"); if (e){ b.classList.remove("hidden"); b.innerHTML = `<b>${e.name}.</b> ${e.description} ${e.shocks.map(s=>`<span class="tag">${dn(s.district)} ${s.indicator} ${s.delta}</span>`).join("")}`; } else b.classList.add("hidden"); if (lastResult) await simulateNow(); });
-  $("#btnRandomEvent").addEventListener("click", async () => { const r = await api("/api/event", {}); evSel.value = r.event.id; evSel.dispatchEvent(new Event("change")); });
-  $("#rules").textContent = L() ? `Ережелер: ${catalog.n_decisions} шешім, қайталаусыз, бір бағыттан ≤${catalog.max_per_direction} шара, бюджет ${catalog.budget}; M1/M3, M4/M7, M5/M13 үйлесімсіз; әсер = (8 − лаг)/8.` : `Правила: ровно ${catalog.n_decisions} решений, без повторов, не более ${catalog.max_per_direction} мер одного направления, бюджет ${catalog.budget}; несовместимы M1/M3, а также M4/M7 и M5/M13 в одном районе; эффект = (8 − лаг)/8.`;
-  renderSlots(); renderMap(); renderMethod(); applyI18n(); renderGauge(null, catalog.baseline.score);
+  evSel.addEventListener("change", () => runAction(null, async () => {
+    const hadResult = Boolean(lastResult);
+    invalidateScenario();
+    const e = catalog.events.find(x => x.id === evSel.value), b = $("#eventBanner");
+    b.classList.toggle("hidden", !e);
+    b.textContent = e ? `${e.name}. ${e.description}` : "";
+    if (hadResult) await simulateNow();
+    await loadPareto();
+  }));
+  $("#btnRandomEvent").addEventListener("click", () => runAction($("#btnRandomEvent"), async () => {
+    const r = await api("/api/event", {}); evSel.value = r.event.id; evSel.dispatchEvent(new Event("change"));
+  }));
+  $("#rules").textContent = `Правила: ровно ${catalog.n_decisions} решений, без повторов, не более ${catalog.max_per_direction} мер одного направления, бюджет ${catalog.budget}; несовместимы M1/M3, а также M4/M7 и M5/M13 в одном районе; эффект = (8 − лаг)/8.`;
+  renderSlots(); renderConstraintOptions(); renderMap(); renderMethod(); applyI18n(); renderGauge(null, catalog.baseline.score);
+  $("#btnReport").disabled = true; $("#btnJson").disabled = true;
   document.querySelectorAll(".tabs button").forEach(b => b.addEventListener("click", () => switchTab(b.dataset.tab)));
-  document.querySelectorAll("#langSeg button").forEach(b => b.addEventListener("click", () => { lang = b.dataset.lang; const saved = decisions(); applyI18n(); renderSlots(); setDecisions(saved); renderMap(); renderMethod(); if (lastResult) renderResult(lastResult); }));
+  document.querySelectorAll("#langSeg button").forEach(b => b.addEventListener("click", () => {
+    const saved = decisions(); lang = b.dataset.lang; applyI18n(); renderSlots(); setDecisions(saved); renderConstraintOptions(); renderMethod();
+  }));
   $("#mapBefore").addEventListener("click", () => { mapMode = "before"; renderMap(); }); $("#mapAfter").addEventListener("click", () => { mapMode = "after"; renderMap(); });
-  $("#btnSimulate").addEventListener("click", simulateNow);
-  $("#btnPreset").addEventListener("click", async () => { setDecisions(PRESET); await simulateNow(); });
-  $("#btnClear").addEventListener("click", () => { setDecisions([]); });
-  $("#btnExplain").addEventListener("click", async () => { if (!(await liveValidate())) return; $("#explainOut").innerHTML = `<p class="muted"><span class="spinner"></span> ${L()?"AI сценарийді талдауда…":"AI анализирует сценарий…"}</p>`; const e = await api("/api/explain", {decisions: decisions(), event: currentEvent(), lang}); if (!e.valid){ $("#explainOut").innerHTML = `<p class="errors">${e.errors.join("; ")}</p>`; return; } renderResult(Object.assign(e.result, {baseline: e.baseline, baseline_no_event: catalog.baseline, event: e.event})); renderExplanation(e.explanation); });
-  $("#btnAnalyze").addEventListener("click", async () => { if (!(await liveValidate())) { $("#analyticsOut").innerHTML = `<p class="errors">${L()?"Алдымен жарамды жиынтық таңдаңыз":"Сначала выберите допустимый набор"}</p>`; return; } $("#analyticsOut").innerHTML = `<p class="muted"><span class="spinner"></span></p>`; renderAnalytics(await api("/api/analyze", {decisions: decisions(), event: currentEvent()})); if (!lastResult) await simulateNow(); renderPareto(await api("/api/pareto")); });
-  $("#btnAgent").addEventListener("click", () => askAgent()); document.querySelectorAll(".chips button").forEach(b => b.addEventListener("click", () => askAgent(b.dataset.q)));
-  $("#btnApplyAgent").addEventListener("click", async () => { if (agentDecisions){ setDecisions(agentDecisions); switchTab("result"); await simulateNow(); } });
-  $("#btnAdvise").addEventListener("click", async () => { $("#adviseOut").innerHTML = `<p class="muted"><span class="spinner"></span></p>`; const valid = await liveValidate(); renderAdvice(await api("/api/advise", {decisions: valid ? decisions() : [], event: currentEvent()})); });
+  $("#btnSimulate").addEventListener("click", () => runAction($("#btnSimulate"), simulateNow));
+  $("#btnPreset").addEventListener("click", () => runAction($("#btnPreset"), async () => { setDecisions(PRESET); await simulateNow(); }));
+  $("#btnClear").addEventListener("click", () => setDecisions([]));
+  $("#btnExplain").addEventListener("click", () => runAction($("#btnExplain"), explainNow));
+  $("#btnAnalyze").addEventListener("click", () => runAction($("#btnAnalyze"), analyzeNow));
+  $("#btnAgent").addEventListener("click", () => runAction($("#btnAgent"), () => askAgent()));
+  document.querySelectorAll(".chips button").forEach(b => b.addEventListener("click", () => runAction(b, () => askAgent(b.dataset.q))));
+  document.querySelectorAll("#agentConstraints input, #agentConstraints select").forEach(el => el.addEventListener("change", () => {
+    if (el.id !== "autoConstraints") $("#autoConstraints").checked = false;
+    agentRequest++; agentDecisions = null; $("#btnApplyAgent").disabled = true;
+  }));
+  $("#btnApplyAgent").addEventListener("click", () => runAction(null, async () => {
+    if (agentDecisions){ const selected = agentDecisions; setDecisions(selected); switchTab("result"); await simulateNow(); }
+  }));
+  $("#btnAdvise").addEventListener("click", () => runAction($("#btnAdvise"), adviceNow));
   $("#btnReload").addEventListener("click", loadScenarios);
-  $("#btnSave").addEventListener("click", async () => { if (!(await liveValidate())) { $("#saveMsg").textContent = L()?"Жиынтық жарамсыз":"Набор недопустим"; return; } const r = await fetch("/api/scenarios", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({team: $("#teamName").value, decisions: decisions(), event: currentEvent()})}); $("#saveMsg").textContent = r.ok ? (L()?"Сақталды ✓ — «Команда сценарийлері» қойындысы":"Сохранено ✓ — вкладка «Сценарии команд»") : (L()?"Қате":"Ошибка сохранения"); });
-  $("#btnReport").addEventListener("click", async () => { if (!(await liveValidate())) return; const md = await api("/api/report", {decisions: decisions(), team: $("#teamName").value, event: currentEvent(), explanation: lastExplanation}); const blob = new Blob([md], {type:"text/markdown"}); const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "astana_scenario_brief.md"; a.click(); });
-  $("#btnJson").addEventListener("click", () => { const blob = new Blob([JSON.stringify({decisions: decisions(), event: currentEvent(), result: lastResult, explanation: lastExplanation}, null, 2)], {type:"application/json"}); const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "astana_scenario.json"; a.click(); });
-  renderPareto(await api("/api/pareto"));
+  $("#btnSave").addEventListener("click", () => runAction($("#btnSave"), async () => {
+    const snapshot = captureScenario();
+    if (!(await liveValidate(snapshot))) return;
+    await api("/api/scenarios", {team:$("#teamName").value, ...snapshot.body});
+    if (isCurrent(snapshot)) $("#saveMsg").textContent = L()?"Сақталды ✓":"Сохранено ✓";
+  }));
+  $("#btnReport").addEventListener("click", () => runAction(null, exportReport));
+  $("#btnJson").addEventListener("click", exportJson);
+  await loadPareto();
 }
-init();
+runAction(null, init);
 </script>
 </body>
 </html>

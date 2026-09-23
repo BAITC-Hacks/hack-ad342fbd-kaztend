@@ -1,2 +1,4 @@
 Set-Location (Join-Path $PSScriptRoot "..")
-python -m pytest -q backend\tests
+$python = if (Test-Path .venv/Scripts/python.exe) { ".venv/Scripts/python.exe" } else { "python" }
+& $python -m pytest -q backend/tests
+exit $LASTEXITCODE

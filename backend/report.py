@@ -15,7 +15,7 @@ def scenario_report(decisions, explanation: dict | None = None, event: dict | No
               f"- Средний по городу D_avg: {r['d_avg']} · слабейший район: {eq['weakest_after']} ({r['d_min']}) · критических значений: {r['n_crit']} (было {b['n_crit']})", "",
               "## Решения", "| # | Мера | Район | Стоимость | Лаг | Вклад в Score | Score на у.е. |", "|---|---|---|---|---|---|---|"]
     for i, c in enumerate(sorted(ce, key=lambda x: int(x["measure"][1:])), 1):
-        lines.append(f"| {i} | {c['measure']} {c['name']} | {c['district'] or 'город'} | {c['cost']} | {c['lag']} кв. | {c['score_gain']:+.2f} | {c['gain_per_unit']:.4f} |")
+        lines.append(f"| {i} | {c['measure']} {c['name']} | {c['district'] or 'город'} | {c['cost']} | {c['lag']} кв. | {c['score_gain']:+.3f} | {c['gain_per_unit']:.4f} |")
     lines += ["", "## Районы", "| Район | До | После | Δ |", "|---|---|---|---|"]
     for d in r["district_scores"]:
         lines.append(f"| {d} | {b['district_scores'][d]} | {r['district_scores'][d]} | {r['district_scores'][d]-b['district_scores'][d]:+.2f} |")

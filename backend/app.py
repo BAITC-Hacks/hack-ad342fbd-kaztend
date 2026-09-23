@@ -1,12 +1,11 @@
 """FastAPI-приложение «Аким на 5 часов» — AI-симулятор бюджета Астаны (HackAlem AI, спец-трек Astana Innovations)."""
-import sys, json, threading
-from contextlib import asynccontextmanager
+import sys, json, hashlib
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Literal
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import PlainTextResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 
 BACKEND_DIR = Path(__file__).resolve().parent
@@ -15,38 +14,13 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 load_dotenv(ROOT / ".env")
 
-import engine, ai, optimizer, analytics, events, store, report  # noqa: E402
+import engine, ai, analytics, events, store, report  # noqa: E402
 import agent as agent_mod  # noqa: E402
+import constraints as user_constraints
+import search
 
 DATA = ROOT / "data"
-TOP_SETS_FILE = DATA / "top_sets.json"
-_top_sets: dict = {"status": "building", "sets": []}
-_pareto: dict | None = None
-
-
-def _build_caches():
-    global _top_sets, _pareto
-    try:
-        if TOP_SETS_FILE.exists():
-            _top_sets = json.loads(TOP_SETS_FILE.read_text(encoding="utf-8"))
-        else:
-            res, n = optimizer.top_k(20)
-            _top_sets = {"status": "ready", "evaluated": n, "sets": [{"score": s, "cost": c, "decisions": [{"measure": m, "district": d} for m, d in dec]} for s, c, dec in res]}
-            DATA.mkdir(parents=True, exist_ok=True)
-            TOP_SETS_FILE.write_text(json.dumps(_top_sets, ensure_ascii=False, indent=1), encoding="utf-8")
-        _pareto = analytics.load_pareto() or analytics.build_pareto_cache()
-    except Exception as e:  # pragma: no cover
-        _top_sets = {"status": f"error: {e}", "sets": []}
-
-
-@asynccontextmanager
-async def lifespan(_app: FastAPI):
-    threading.Thread(target=_build_caches, daemon=True).start()
-    yield
-
-
-app = FastAPI(title="Аким на 5 часов — AI-симулятор бюджета Астаны", lifespan=lifespan)
-
+app = FastAPI(title="Аким на 5 часов — AI-симулятор бюджета Астаны")
 
 class DecisionIn(BaseModel):
     measure: str
@@ -59,10 +33,18 @@ class DecisionsIn(BaseModel):
     lang: Optional[str] = "ru"
 
 
+class AdvisorConstraints(BaseModel):
+    budget: int = Field(default=100, ge=0, le=100)
+    focus_district: Optional[Literal["Есиль", "Алматы", "Сарыарка", "Байконур", "Нура"]] = None
+    directions: list[Literal["Транспорт", "Экология", "Соцсфера", "Безопасность", "Сервисы"]] = Field(default_factory=list)
+
+
 class AgentIn(BaseModel):
     message: str
     decisions: list[DecisionIn] = []
     lang: Optional[str] = "ru"
+    event: Optional[str] = None
+    constraints: Optional[AdvisorConstraints] = None
 
 
 class ScenarioIn(BaseModel):
@@ -76,10 +58,16 @@ class ReportIn(BaseModel):
     team: Optional[str] = ""
     event: Optional[str] = None
     explanation: Optional[dict] = None
+    explanation_scenario_id: Optional[str] = None
 
 
 def _to_engine(items: list[DecisionIn]) -> list[engine.Decision]:
     return [engine.Decision(d.measure, (d.district or None)) for d in items]
+
+
+def _scenario_id(items, event):
+    value = {"decisions": sorted((d.measure, d.district or "") for d in items), "event": event or None}
+    return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
 
 
 def _districts_for(event_id: Optional[str]):
@@ -101,7 +89,8 @@ def catalog():
                       "effects": m.effects, **passports["measures"].get(m.id, {})} for m in engine.MEASURES.values()],
         "synergies": [{"pair": list(p), "indicator": k, "bonus": b} for p, (k, b) in engine.SYNERGIES.items()],
         "incompatible_any": engine.INCOMPAT_ANY, "incompatible_same_district": engine.INCOMPAT_SAME_DISTRICT,
-        "events": [{"id": e["id"], "name": e["name"], "description": e["description"], "shocks": e["shocks"]} for e in events.EVENTS],
+        "events": [{"id": e["id"], "name": e["name"], "description": e["description"], "shocks": e["shocks"],
+                    "baseline": engine.baseline(events.apply_event(e))} for e in events.EVENTS],
         "references": passports["references"], "baseline": engine.baseline(),
     }
 
@@ -120,6 +109,7 @@ def simulate(body: DecisionsIn):
     result["baseline"] = engine.baseline(districts)
     result["baseline_no_event"] = engine.baseline()
     result["event"] = ev
+    result["scenario_id"] = _scenario_id(body.decisions, body.event)
     return result
 
 
@@ -132,7 +122,8 @@ async def explain(body: DecisionsIn):
         return {"valid": False, "errors": result["errors"]}
     base = engine.baseline(districts)
     explanation = await ai.explain_scenario([(d.measure, d.district or None) for d in body.decisions], result, base, lang=body.lang or "ru", event=ev)
-    return {"valid": True, "result": result, "baseline": base, "explanation": explanation, "event": ev}
+    return {"valid": True, "result": result, "baseline": base, "explanation": explanation, "event": ev,
+            "scenario_id": _scenario_id(body.decisions, body.event)}
 
 
 @app.post("/api/analyze")
@@ -140,10 +131,11 @@ def analyze(body: DecisionsIn):
     districts, ev = _districts_for(body.event)
     out = analytics.analyze(_to_engine(body.decisions), districts)
     out["event"] = ev
+    out["scenario_id"] = _scenario_id(body.decisions, body.event)
     return out
 
 
-def _improve(decisions: list[engine.Decision], k: int = 3, districts=None) -> list[dict]:
+def _improve(decisions: list[engine.Decision], k: int = 3, districts=None, constraints=None) -> list[dict]:
     """Локальный поиск: одна замена меры или района, которая максимально повышает Score."""
     current = engine.simulate(decisions, districts)
     if not current["valid"]:
@@ -155,6 +147,7 @@ def _improve(decisions: list[engine.Decision], k: int = 3, districts=None) -> li
             for dist in targets:
                 cand = list(decisions); cand[i] = engine.Decision(m.id, dist)
                 if engine.validate(cand): continue
+                if constraints and not user_constraints.matches(cand, constraints["budget"], constraints.get("focus_district"), constraints.get("directions", ())): continue
                 r = engine.simulate(cand, districts)
                 if r["score"] > current["score"] + 1e-9:
                     best.append({"score": r["score"], "cost": r["cost"], "delta": round(r["score"] - current["score"], 2),
@@ -175,17 +168,23 @@ def _improve(decisions: list[engine.Decision], k: int = 3, districts=None) -> li
 def advise(body: Optional[DecisionsIn] = None):
     districts, _ = _districts_for(body.event) if body else (None, None)
     improvements = _improve(_to_engine(body.decisions), districts=districts) if body and body.decisions else []
-    return {"top_sets": _top_sets, "improvements": improvements,
-            "pareto": {"ready": _pareto is not None, "front": (_pareto or {}).get("front", []), "evaluated": (_pareto or {}).get("evaluated")}}
+    cache = search.get_cache(body.event if body else None)
+    return {"event": body.event if body else None,
+            "top_sets": {"status": "ready", "sets": cache["sets"], "evaluated": cache["evaluated"]},
+            "improvements": improvements,
+            "pareto": {"ready": True, "front": cache["front"], "evaluated": cache["evaluated"]}}
 
 
 @app.get("/api/pareto")
-def pareto(budget: Optional[int] = None, focus_district: Optional[str] = None):
-    if _pareto is None:
-        return {"ready": False}
-    out = {"ready": True, "evaluated": _pareto["evaluated"], "front": _pareto["front"], "method": _pareto["method"]}
+def pareto(budget: Optional[int] = None, focus_district: Optional[str] = None, event: Optional[str] = None):
+    _districts_for(event)
+    if focus_district and focus_district not in engine.DISTRICTS:
+        raise HTTPException(422, "Неизвестный район")
+    cache = search.get_cache(event, focus_district)
+    out = {"ready": True, "event": event, "evaluated": cache["evaluated"], "front": cache["front"], "method": cache["method"]}
     if budget is not None:
-        out["best_under_budget"] = analytics.best_under_budget(budget, focus_district, _pareto)
+        out["best_under_budget"] = cache["best_under_budget"].get(str(max(0, min(100, budget))))
+        out["minimum_cost"] = cache["minimum_cost"]
     return out
 
 
@@ -203,11 +202,20 @@ def random_event(seed: Optional[int] = None):
 
 @app.post("/api/agent")
 async def agent_endpoint(body: AgentIn):
+    districts, ev = _districts_for(body.event)
     current = [{"measure": d.measure, "district": d.district} for d in body.decisions] or None
-    out = await agent_mod.run_agent(body.message, current, body.lang or "ru")
+    out = await agent_mod.run_agent(body.message, current, body.lang or "ru", body.event,
+                                    body.constraints.model_dump() if body.constraints else None)
     if out.get("decisions"):
-        out["result"] = engine.simulate(_to_engine([DecisionIn(**d) for d in out["decisions"]]))
+        out["result"] = engine.simulate(_to_engine([DecisionIn(**d) for d in out["decisions"]]), districts)
+    out["event"] = ev
+    out["baseline"] = engine.baseline(districts)
     return out
+
+
+@app.post("/api/constraints")
+def parse_agent_constraints(body: AgentIn):
+    return user_constraints.parse_constraints(body.message, body.decisions)
 
 
 @app.get("/api/scenarios")
@@ -232,6 +240,8 @@ def delete_scenario(sid: str):
 @app.post("/api/report", response_class=PlainTextResponse)
 def make_report(body: ReportIn):
     districts, ev = _districts_for(body.event)
+    if body.explanation is not None and body.explanation_scenario_id != _scenario_id(body.decisions, body.event):
+        raise HTTPException(409, "Объяснение относится к другому сценарию. Сформируйте его заново.")
     return report.scenario_report(_to_engine(body.decisions), body.explanation, ev, districts, body.team or "")
 
 

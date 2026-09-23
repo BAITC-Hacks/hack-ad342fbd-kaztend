@@ -4,7 +4,9 @@
 flowchart LR
   UI[frontend/index.html<br/>ванильный JS, SVG-картограмма, RU/KZ] -->|JSON| API[backend/app.py<br/>FastAPI]
   API --> ENG[engine.py<br/>детерминированный расчёт Score по ТЗ:<br/>валидатор, лаги, синергии, штрафы]
-  API --> AN[analytics.py<br/>робастность весов (OECD/JRC), равенство,<br/>эффективность мер, Парето-фронт]
+  API --> SEARCH[search.py<br/>кэш поиска по событию и приоритетам]
+  AG --> CON[constraints.py<br/>бюджет, район, направления]
+  API --> AN[analytics.py<br/>робастность весов (OECD/JRC), равенство,<br/>вклады Шепли, Парето-фронт]
   API --> EV[events.py<br/>шоки показателей до применения мер]
   API --> AG[agent.py<br/>LLM-агент с инструментами:<br/>catalog → validate → simulate → improve → best_under_budget]
   API --> AI[ai.py<br/>LLM-объяснение: structured outputs,<br/>DEMO_MODE fallback]

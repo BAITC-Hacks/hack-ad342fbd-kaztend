@@ -98,6 +98,15 @@ def simulate(decisions: list[Decision], districts: dict | None = None) -> dict:
     errs = validate(decisions)
     if errs:
         return {"valid": False, "errors": errs}
+    return _simulate_effects(decisions, districts)
+
+
+def _simulate_effects(decisions: list[Decision], districts: dict | None = None, *, details: bool = True) -> dict:
+    """Та же формула для подмножеств мер при атрибуции Шепли.
+
+    Внутренний расчёт: публичный simulate по-прежнему требует ровно пять решений.
+    """
+    districts = districts or DISTRICTS
     new = {d: list(v) for d,(_,v) in districts.items()}
     contrib = []  # (мера, район, показатель, дельта)
     by_id = {d.measure: d for d in decisions}
@@ -108,23 +117,25 @@ def simulate(decisions: list[Decision], districts: dict | None = None) -> dict:
             for k,eff in m.effects.items():
                 delta = eff*share
                 new[dist][INDICATORS.index(k)] += delta
-                contrib.append((m.id, dist, k, round(delta,3)))
+                if details: contrib.append((m.id, dist, k, round(delta,3)))
     for (a,b),(k,bonus) in SYNERGIES.items():
         if a in by_id and b in by_id:
             dist = by_id[a].district if MEASURES[a].scope=="Район" else None
             targets = [dist] if dist else list(DISTRICTS)
             for t in targets:
                 new[t][INDICATORS.index(k)] += bonus
-                contrib.append((f"синергия {a}+{b}", t, k, bonus))
+                if details: contrib.append((f"синергия {a}+{b}", t, k, bonus))
     for dist in new:
         new[dist] = [min(100,max(0,x)) for x in new[dist]]
     d_scores = {dist: sum(WEIGHTS[k]*new[dist][i] for i,k in enumerate(INDICATORS)) for dist in new}
     d_avg = sum(districts[dist][0]*d_scores[dist] for dist in new)
     d_min = min(d_scores.values())
     n_crit = sum(1 for dist in new for x in new[dist] if x < CRIT_THRESHOLD)
-    crit = [(dist,k) for dist in new for i,k in enumerate(INDICATORS) if new[dist][i] < CRIT_THRESHOLD]
     score = 0.7*d_avg + 0.3*d_min - 1.0*n_crit
     cost = sum(MEASURES[d.measure].cost for d in decisions)
+    if not details:
+        return {"valid": True, "score": round(score, 2), "cost": cost}
+    crit = [(dist,k) for dist in new for i,k in enumerate(INDICATORS) if new[dist][i] < CRIT_THRESHOLD]
     return {"valid": True, "score": round(score,2), "cost": cost, "budget_left": BUDGET-cost,
             "d_avg": round(d_avg,2), "d_min": round(d_min,2), "n_crit": n_crit, "critical": crit,
             "district_scores": {k: round(v,2) for k,v in d_scores.items()},

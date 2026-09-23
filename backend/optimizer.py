@@ -2,8 +2,9 @@
 from itertools import combinations, product
 import time
 from engine import MEASURES, DISTRICTS, Decision, validate, simulate, BUDGET, N_DECISIONS
+import constraints
 
-def enumerate_valid():
+def enumerate_valid(focus_district=None, directions=()):
     ids = list(MEASURES)
     dists = list(DISTRICTS)
     for combo in combinations(ids, N_DECISIONS):
@@ -13,10 +14,14 @@ def enumerate_valid():
         for i in combo: dirs[MEASURES[i].direction] = dirs.get(MEASURES[i].direction,0)+1
         if max(dirs.values()) > 2: continue
         if "M1" in combo and "M3" in combo: continue
+        if any(direction not in dirs for direction in directions): continue
         district_slots = [i for i in combo if MEASURES[i].scope == "Район"]
+        if focus_district and len(district_slots) < 2: continue
         for assign in product(dists, repeat=len(district_slots)):
+            if focus_district and assign.count(focus_district) < 2: continue
             amap = dict(zip(district_slots, assign))
             decisions = [Decision(i, amap.get(i)) for i in combo]
+            if not constraints.matches(decisions, focus_district=focus_district, directions=directions): continue
             if validate(decisions): continue
             yield decisions
 

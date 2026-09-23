@@ -56,38 +56,44 @@ def equity(result: dict, base: dict) -> dict:
             "note": "Формула Score уже содержит роулсианский член 0.3×min(D) и штраф за значения <40 (непокомпенсаторная логика, OECD/JRC 2008)."}
 
 def cost_effectiveness(decisions: list[Decision], districts: dict | None = None) -> list[dict]:
-    """Вклад каждой меры в Score (приближённая атрибуция: 0.7×взвешенный по населению вклад в D_avg
-    + 0.3×вклад в оценку слабейшего района) и стоимость единицы результата."""
-    districts = districts or DISTRICTS
-    r = engine.simulate(decisions, districts)
-    if not r["valid"]:
+    """Точная атрибуция Шепли по 32 подмножествам пяти мер.
+
+    Учитывает синергии, clipping, смену слабейшего района и оба знака штрафа.
+    Подмножества нужны только для объяснения; правила публичного simulate неизменны.
+    """
+    from math import factorial
+    if engine.validate(decisions):
         return []
-    weakest = min(r["district_scores"], key=r["district_scores"].get)
+    n = len(decisions)
+    values = {}
+    for mask in range(1 << n):
+        subset = [d for i, d in enumerate(decisions) if mask & (1 << i)]
+        values[mask] = engine._simulate_effects(subset, districts)
     out = []
-    for d in decisions:
+    for i, d in enumerate(decisions):
+        gain = penalty = 0.0
+        for mask, before in values.items():
+            if mask & (1 << i):
+                continue
+            size = mask.bit_count()
+            weight = factorial(size) * factorial(n-size-1) / factorial(n)
+            after = values[mask | (1 << i)]
+            gain += weight * (after["score"] - before["score"])
+            penalty += weight * (before["n_crit"] - after["n_crit"])
         m = MEASURES[d.measure]
-        contrib_avg = contrib_min = 0.0
-        for mid, dist, k, delta in r["contributions"]:
-            if mid == m.id or (mid.startswith("синергия") and m.id in mid):
-                share = 0.5 if mid.startswith("синергия") else 1.0  # синергию делим между парой
-                contrib_avg += districts[dist][0] * WEIGHTS[k] * delta * share
-                if dist == weakest:
-                    contrib_min += WEIGHTS[k] * delta * share
-        # снятие штрафа: критические значения базы (<40), которые набор поднял выше порога
-        penalty_credit = 0.0
-        base_crit = set(map(tuple, engine.baseline(districts)["critical"]))
-        fixed = base_crit - set(map(tuple, r["critical"]))
-        for dist, k in fixed:
-            lifters = [c for c in r["contributions"] if c[1] == dist and c[2] == k and c[3] > 0]
-            total = sum(c[3] for c in lifters)
-            for mid, _, _, delta in lifters:
-                if mid == m.id: penalty_credit += delta/total
-        gain = 0.7*contrib_avg + 0.3*contrib_min + penalty_credit
-        out.append({"measure": m.id, "name": m.name, "district": d.district, "cost": m.cost, "penalty_credit": round(penalty_credit,3),
-                    "score_gain": round(gain, 3), "gain_per_unit": round(gain/m.cost, 4), "lag": m.lag,
-                    "effect_share": round((engine.H - m.lag)/engine.H, 3)})
-    out.sort(key=lambda x: -x["gain_per_unit"])
-    return out
+        out.append({"measure": m.id, "name": m.name, "district": d.district,
+                    "cost": m.cost, "penalty_credit": round(penalty, 3),
+                    "score_gain": round(gain, 3), "lag": m.lag,
+                    "effect_share": round((engine.H-m.lag)/engine.H, 3)})
+    # Распределяем только погрешность округления (тысячные доли Score).
+    total = values[(1 << n)-1]["score"] - values[0]["score"]
+    residual = round(total-sum(c["score_gain"] for c in out), 3)
+    largest = max(out, key=lambda c: (abs(c["score_gain"]), c["measure"]))
+    largest["score_gain"] = round(largest["score_gain"] + residual, 3)
+    for c in out:
+        c["gain_per_unit"] = round(c["score_gain"]/c["cost"], 4)
+    return sorted(out, key=lambda c: (-c["gain_per_unit"], c["measure"]))
+
 
 def _all_valid_results():
     """Полный перебор (кэшируется в data/pareto.json)."""
@@ -126,19 +132,15 @@ def load_pareto() -> dict | None:
     p = DATA / "pareto.json"
     return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
 
-def best_under_budget(cap: int, focus_district: str | None = None, pareto: dict | None = None) -> dict | None:
-    pareto = pareto or load_pareto()
-    if not pareto: return None
-    if not focus_district:
-        return pareto["best_under_budget"].get(str(max(0, min(engine.BUDGET, int(cap)))))
-    # с фокусом на район: лучший набор по фронту/кэшу, где >=2 меры адресуют район (или городские)
-    best = None
-    for item in pareto["front"]:
-        if item["cost"] > cap: continue
-        touches = sum(1 for d in item["decisions"] if d["district"] == focus_district or d["district"] is None)
-        if touches >= 3 and (best is None or item["score"] > best["score"]):
-            best = item
-    return best or pareto["best_under_budget"].get(str(int(cap)))
+def best_under_budget(cap: int, focus_district: str | None = None, pareto: dict | None = None,
+                      event: str | None = None, directions=()) -> dict | None:
+    from search import get_cache
+    if event or focus_district or directions:
+        pareto = get_cache(event, focus_district, tuple(directions))
+    else:
+        pareto = pareto or get_cache()
+    return pareto["best_under_budget"].get(str(max(0, min(engine.BUDGET, int(cap)))))
+
 
 def analyze(decisions: list[Decision], districts: dict | None = None) -> dict:
     r = engine.simulate(decisions, districts)
