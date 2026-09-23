@@ -73,7 +73,7 @@
 9. «Сохранить» → сценарий попадает в лидерборд команд; «Скачать брифинг» → Markdown-отчёт для акима.
 
 ## 5. Технологии
-- **Backend:** Python 3.11–3.13, FastAPI, Uvicorn, Pydantic, httpx, python-dotenv.
+- **Backend:** Python 3.11+, FastAPI, Uvicorn, Pydantic, httpx, python-dotenv.
 - **AI:** OpenAI API — модель `gpt-6-sol` через Responses API (structured outputs, function tools); детерминированный fallback без ключа.
 - **Frontend:** один файл `frontend/index.html` — ванильный JS, SVG (картограмма, шкала Score, Парето-график), без сборки и внешних CDN.
 - **Данные:** датасет ТЗ (районы, показатели, 14 мер, синергии, несовместимости), `data/passports.json`, предрассчитанные `data/top_sets.json` и `data/pareto.json`, `data/scenarios.json` (лидерборд).
@@ -97,7 +97,7 @@ frontend/index.html  ──JSON──▶  backend/app.py (FastAPI)
 Подробнее: `docs/ARCHITECTURE.md` (схема) и `docs/METHODOLOGY.md` (формула, методология, источники).
 
 ## 7. Установка и запуск
-Требования: Python 3.11–3.13 (локально проверено на 3.12), Windows / macOS / Linux. Docker — по желанию.
+Требования: Python 3.11 или новее (проверено на 3.12 и 3.13), Windows / macOS / Linux. Docker — по желанию.
 
 ```bash
 git clone https://github.com/BAITC-Hacks/hack-ad342fbd-kaztend.git
@@ -118,7 +118,7 @@ bash scripts/run.sh
 ```
 Откройте http://localhost:8000. Windows-скрипты: `scripts\run.ps1`, `scripts\test.ps1` (при блокировке: `Unblock-File .\scripts\*.ps1`).
 
-Версии прямых зависимостей зафиксированы в `requirements.txt`. Скрипты запуска и тестов автоматически используют `.venv`, если она существует. `APP_PORT` поддерживается обеими версиями скрипта запуска.
+Минимальные версии зависимостей указаны в `requirements.txt`: pip сам подберёт готовые сборки для вашей версии Python, компилятор не нужен. Скрипты запуска и тестов автоматически используют `.venv`, если она существует. `APP_PORT` поддерживается обеими версиями скрипта запуска.
 
 Проверки: `scripts/test.ps1` или `bash scripts/test.sh`.
 
