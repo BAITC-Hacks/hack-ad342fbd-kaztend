@@ -172,6 +172,6 @@ Docker: `docker compose up --build` → http://localhost:8000.
 
 | Роль | Участник | Контакты |
 |---|---|---|
-| Главный разработчик | Сарсенбай Мағжан | magzhansaken@mail.ru, +7 778 328 4216 |
+| Главный разработчик | Сарсенбай Мағжан | magzhansaken@mail.ru |
 | Бэкенд-разработчик | Ерденбаев Адильжан | adilzhanerdenbaev2006@gmail.com |
 | Фронтенд-разработчик | Ергараева Салтанат | ergaraevasaltanat@gmail.com |
